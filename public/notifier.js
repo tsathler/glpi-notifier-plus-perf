@@ -5,7 +5,9 @@
 (function() {
     'use strict';
 
-    var POLL_INTERVAL_MS = 30000;
+    // 60 s keeps the bell responsive while halving the server load of the
+    // previous 30 s interval (one request per open tab).
+    var POLL_INTERVAL_MS = 60000;
     var LS_COLLAPSED_KEY  = 'notifier:collapsed';
     var LS_TAB_KEY        = 'notifier:tab';
     var BASE_URL          = null;
@@ -109,7 +111,11 @@
         opts.headers = opts.headers || {};
         opts.headers['X-Requested-With'] = 'XMLHttpRequest';
         return fetch(url, opts).then(function(r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
+            if (!r.ok) {
+                var err = new Error('HTTP ' + r.status);
+                err.status = r.status;
+                throw err;
+            }
             return r.json();
         });
     }
@@ -1019,6 +1025,9 @@
 
     function refresh() {
         if (pollInFlight) return;
+        // Background tabs do not need live updates; the visibilitychange
+        // handler refreshes as soon as the tab is shown again.
+        if (document.hidden) return;
         pollInFlight = true;
         fetchJson(BASE_URL + '/ajax/list.php').then(function(data) {
             state.items        = (data && data.items) || [];
@@ -1078,17 +1087,36 @@
             lastUnreadByTab  = Object.assign({}, state.unreadByTab);
 
             render();
-        }).catch(function() {
-            /* leave previous state intact */
+        }).catch(function(err) {
+            // Session expired or access revoked: polling would only keep
+            // hitting the server with failing requests until a reload.
+            if (err && (err.status === 401 || err.status === 403)) {
+                stopPolling();
+            }
+            /* otherwise leave previous state intact */
         }).then(function() {
             pollInFlight = false;
         });
+    }
+
+    function onVisibilityChange() {
+        if (!document.hidden && pollTimer) {
+            refresh();
+        }
     }
 
     function startPolling() {
         if (pollTimer) return;
         refresh();
         pollTimer = setInterval(refresh, POLL_INTERVAL_MS);
+        document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+
+    function stopPolling() {
+        if (!pollTimer) return;
+        clearInterval(pollTimer);
+        pollTimer = null;
+        document.removeEventListener('visibilitychange', onVisibilityChange);
     }
 
     // ---------------------------------------------------------------- boot
