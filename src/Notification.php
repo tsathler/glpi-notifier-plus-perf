@@ -1134,39 +1134,27 @@ class Notification extends CommonDBTM
      */
 
     /**
-     * Returns the list of entity IDs the given user has access to via a central
-     * (technician) profile. Always includes entity 0 (root).
-     * If the user has any recursive profile, all entities are included.
+     * Returns the entity IDs the bell should show notifications for: the
+     * entities currently active in the user's GLPI session (the entity
+     * selector, including sub-entities when "+ sub-entities" is chosen).
+     * Falls back to the single active entity when the list is not set.
+     *
+     * Only used on read paths for the logged-in user (getForUser, counters,
+     * unassigned tickets), so the session always belongs to $users_id.
      *
      * @return array<int,true>  keys are entity IDs
      */
     private static function getAllowedEntitiesForUser(int $users_id): array
     {
-        global $DB;
+        $activeEntities = $_SESSION['glpiactiveentities'] ?? [];
 
-        $userEntitiesRs = $DB->doQuery("
-            SELECT DISTINCT gu.entities_id, gu.is_recursive
-            FROM glpi_profiles_users AS gu
-            INNER JOIN glpi_profiles AS p ON p.id = gu.profiles_id
-            WHERE gu.users_id = {$users_id}
-            AND p.interface = 'central'
-        ");
+        if (empty($activeEntities)) {
+            $activeEntities = [(int)($_SESSION['glpiactive_entity'] ?? 0)];
+        }
 
-        $allowedEntities = [0 => true]; // always include root entity
-
-        while ($row = $userEntitiesRs->fetch_assoc()) {
-            $eid = (int)$row['entities_id'];
-            $allowedEntities[$eid] = true;
-
-            if ($row['is_recursive']) {
-                // Expand only the subtree rooted at this entity,
-                // not the entire system. getSonsOf returns the entity
-                // itself plus all its descendants.
-                $sons = getSonsOf('glpi_entities', $eid);
-                foreach ($sons as $sid) {
-                    $allowedEntities[(int)$sid] = true;
-                }
-            }
+        $allowedEntities = [];
+        foreach ($activeEntities as $entityId) {
+            $allowedEntities[(int)$entityId] = true;
         }
 
         return $allowedEntities;
