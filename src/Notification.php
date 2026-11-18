@@ -2482,6 +2482,19 @@ class Notification extends CommonDBTM
             ['date_mod' => ['<', $cutoff]],
         ]);
 
+        // Remove unread notifications nobody will act on: tickets closed for
+        // more than 7 days or solved for more than 30 days. Without this,
+        // unread rows were never purged and backlogs grew without bound.
+        $DB->doQuery("
+            DELETE n FROM glpi_plugin_notifier_notifications AS n
+            INNER JOIN glpi_tickets AS t ON (n.itemtype = 'Ticket' AND t.id = n.items_id)
+            WHERE n.is_read = 0
+            AND (
+                (t.status = 6 AND n.date_creation < NOW() - INTERVAL 7 DAY)
+                OR (t.status = 5 AND n.date_creation < NOW() - INTERVAL 30 DAY)
+            )
+        ");
+
         // Remove notifications for deleted or inactive users
         $DB->doQuery("
             DELETE n FROM glpi_plugin_notifier_notifications AS n
