@@ -1134,39 +1134,27 @@ class Notification extends CommonDBTM
      */
 
     /**
-     * Returns the list of entity IDs the given user has access to via a central
-     * (technician) profile. Always includes entity 0 (root).
-     * If the user has any recursive profile, all entities are included.
+     * Returns the entity IDs the bell should show notifications for: the
+     * entities currently active in the user's GLPI session (the entity
+     * selector, including sub-entities when "+ sub-entities" is chosen).
+     * Falls back to the single active entity when the list is not set.
+     *
+     * Only used on read paths for the logged-in user (getForUser, counters,
+     * unassigned tickets), so the session always belongs to $users_id.
      *
      * @return array<int,true>  keys are entity IDs
      */
     private static function getAllowedEntitiesForUser(int $users_id): array
     {
-        global $DB;
+        $activeEntities = $_SESSION['glpiactiveentities'] ?? [];
 
-        $userEntitiesRs = $DB->doQuery("
-            SELECT DISTINCT gu.entities_id, gu.is_recursive
-            FROM glpi_profiles_users AS gu
-            INNER JOIN glpi_profiles AS p ON p.id = gu.profiles_id
-            WHERE gu.users_id = {$users_id}
-            AND p.interface = 'central'
-        ");
+        if (empty($activeEntities)) {
+            $activeEntities = [(int)($_SESSION['glpiactive_entity'] ?? 0)];
+        }
 
-        $allowedEntities = [0 => true]; // always include root entity
-
-        while ($row = $userEntitiesRs->fetch_assoc()) {
-            $eid = (int)$row['entities_id'];
-            $allowedEntities[$eid] = true;
-
-            if ($row['is_recursive']) {
-                // Expand only the subtree rooted at this entity,
-                // not the entire system. getSonsOf returns the entity
-                // itself plus all its descendants.
-                $sons = getSonsOf('glpi_entities', $eid);
-                foreach ($sons as $sid) {
-                    $allowedEntities[(int)$sid] = true;
-                }
-            }
+        $allowedEntities = [];
+        foreach ($activeEntities as $entityId) {
+            $allowedEntities[(int)$entityId] = true;
         }
 
         return $allowedEntities;
@@ -1819,6 +1807,141 @@ class Notification extends CommonDBTM
         return 'other';
     }
 
+    /**
+     * Batch-loads the lookups getForUser() needs for a set of notification
+     * rows: actor display names, source item statuses, ticket assignees
+     * (users and groups) and the current user's groups.
+     *
+     * @param array<int,array<string,mixed>> $rows Raw notification rows
+     * @return array{
+     *     actors: array<int,string>,
+     *     status: array<string,array<int,int>>,
+     *     assignedUsers: array<int,array<int,true>>,
+     *     assignedGroups: array<int,array<int,true>>,
+     *     userGroups: array<int,true>
+     * }
+     */
+    private static function loadRowContext(array $rows, int $users_id): array
+    {
+        global $DB;
+
+        $ctx = [
+            'actors'         => [],
+            'status'         => ['Ticket' => [], 'Change' => [], 'Problem' => []],
+            'assignedUsers'  => [],
+            'assignedGroups' => [],
+            'userGroups'     => [],
+        ];
+
+        $actorIds = [];
+        $idsByType = ['Ticket' => [], 'Change' => [], 'Problem' => []];
+        foreach ($rows as $row) {
+            $actorId = (int)$row['actor_users_id'];
+            if ($actorId > 0) {
+                $actorIds[$actorId] = true;
+            }
+            $itemsId = (int)$row['items_id'];
+            if ($itemsId > 0 && isset($idsByType[$row['itemtype']])) {
+                $idsByType[$row['itemtype']][$itemsId] = true;
+            }
+        }
+
+        // Actor display names — same rule as actorName()
+        if (!empty($actorIds)) {
+            $rs = $DB->request([
+                'SELECT' => ['id', 'name', 'firstname', 'realname'],
+                'FROM'   => 'glpi_users',
+                'WHERE'  => ['id' => array_keys($actorIds)],
+            ]);
+            foreach ($rs as $u) {
+                $full = trim(($u['firstname'] ?? '') . ' ' . ($u['realname'] ?? ''));
+                $ctx['actors'][(int)$u['id']] = $full !== '' ? $full : (string)($u['name'] ?? '');
+            }
+        }
+
+        // Source item statuses — same rule as getTicketStatus()
+        $tableMap = ['Ticket' => 'glpi_tickets', 'Change' => 'glpi_changes', 'Problem' => 'glpi_problems'];
+        foreach ($idsByType as $itemtype => $ids) {
+            if (empty($ids)) {
+                continue;
+            }
+            $rs = $DB->request([
+                'SELECT' => ['id', 'status'],
+                'FROM'   => $tableMap[$itemtype],
+                'WHERE'  => ['id' => array_keys($ids)],
+            ]);
+            foreach ($rs as $r) {
+                $ctx['status'][$itemtype][(int)$r['id']] = (int)$r['status'];
+            }
+        }
+
+        // Ticket assignees — what classifyNotification() checks per row
+        $ticketIds = array_keys($idsByType['Ticket']);
+        if (!empty($ticketIds)) {
+            $rs = $DB->request([
+                'SELECT' => ['tickets_id', 'users_id'],
+                'FROM'   => 'glpi_tickets_users',
+                'WHERE'  => ['tickets_id' => $ticketIds, 'type' => 2],
+            ]);
+            foreach ($rs as $r) {
+                $ctx['assignedUsers'][(int)$r['tickets_id']][(int)$r['users_id']] = true;
+            }
+
+            $rs = $DB->request([
+                'SELECT' => ['tickets_id', 'groups_id'],
+                'FROM'   => 'glpi_groups_tickets',
+                'WHERE'  => ['tickets_id' => $ticketIds, 'type' => 2],
+            ]);
+            foreach ($rs as $r) {
+                $ctx['assignedGroups'][(int)$r['tickets_id']][(int)$r['groups_id']] = true;
+            }
+
+            $rs = $DB->request([
+                'SELECT' => ['groups_id'],
+                'FROM'   => 'glpi_groups_users',
+                'WHERE'  => ['users_id' => $users_id],
+            ]);
+            foreach ($rs as $r) {
+                $ctx['userGroups'][(int)$r['groups_id']] = true;
+            }
+        }
+
+        return $ctx;
+    }
+
+    /**
+     * Same classification as classifyNotification(), using the lookups
+     * preloaded by loadRowContext() instead of querying per item.
+     */
+    private static function classifyWithContext(array $item, int $users_id, array $ctx): string
+    {
+        if ($item['itemtype'] !== 'Ticket') {
+            if ($item['channel'] === 'direct') { return 'mine'; }
+            if ($item['channel'] === 'group')  { return 'team'; }
+            return 'other';
+        }
+
+        $status = (int)($item['ticket_status'] ?? 0);
+        if ($status === 6) { return 'closed'; }
+        if ($status === 5) { return 'resolved'; }
+
+        $ticketId = (int)$item['items_id'];
+        $users    = $ctx['assignedUsers'][$ticketId] ?? [];
+        $groups   = $ctx['assignedGroups'][$ticketId] ?? [];
+
+        if (empty($users) && empty($groups)) {
+            return 'new';
+        }
+        if (isset($users[$users_id])) {
+            return 'mine';
+        }
+        if (!empty(array_intersect_key($groups, $ctx['userGroups']))) {
+            return 'team';
+        }
+
+        return 'other';
+    }
+
     public static function getForUser(int $users_id, int $limit = 100, bool $include_read = false): array
     {
         global $DB;
@@ -1851,6 +1974,12 @@ class Notification extends CommonDBTM
         // Non-ticket items (Change, Problem, ProjectTask) are also filtered.
         // We use a raw query to support the dynamic JOIN across item types.
         $notifTable = 'glpi_plugin_notifier_notifications';
+
+        // Only the newest rows can make it into the returned slice, so there
+        // is no need to load the user's whole backlog. Twice the limit leaves
+        // headroom for rows dropped below (deleted/merged tickets).
+        $fetchLimit = max(1, $limit) * 2;
+
         $whereStr = "n.users_id = {$users_id}" . ($include_read ? '' : ' AND n.is_read = 0');
         if ($filter !== null) {
             $whereStr .= ' AND ' . $filter->getValue();
@@ -1871,6 +2000,7 @@ class Notification extends CommonDBTM
                 OR (n.itemtype = 'ProjectTask' AND pt.id IS NOT NULL AND pt.entities_id IN ({$entityIn}))
             )
             ORDER BY n.date_creation DESC
+            LIMIT {$fetchLimit}
         ";
 
         $rs = $DB->doQuery($rawSql);
@@ -1912,31 +2042,40 @@ class Notification extends CommonDBTM
             }
         }
 
+        // Drop notifications for tickets that were deleted or merged
+        $rawRows = array_values(array_filter(
+            $rawRows,
+            fn(array $row): bool => !($row['itemtype'] === 'Ticket'
+                && isset($deletedTicketIds[(int)$row['items_id']]))
+        ));
+
+        // Load everything the rows need in a fixed number of queries instead
+        // of several queries per row (actor, status and category lookups).
+        $ctx = self::loadRowContext($rawRows, $users_id);
+
         $rows = [];
         $storedTicketIds = [];
         foreach ($rawRows as $row) {
-            // Skip notifications for tickets that were deleted or merged
-            if ($row['itemtype'] === 'Ticket' && isset($deletedTicketIds[(int)$row['items_id']])) {
-                continue;
-            }
-            if ($row['itemtype'] === 'Ticket') {
-                $storedTicketIds[(int)$row['items_id']] = true;
+            $itemtype = $row['itemtype'];
+            $itemsId  = (int)$row['items_id'];
+            if ($itemtype === 'Ticket') {
+                $storedTicketIds[$itemsId] = true;
             }
             $item = [
                 'id'            => (int)$row['id'],
-                'itemtype'      => $row['itemtype'],
-                'items_id'      => (int)$row['items_id'],
+                'itemtype'      => $itemtype,
+                'items_id'      => $itemsId,
                 'event'         => $row['event'],
                 'channel'       => $row['channel'],
                 'title'         => $row['title'],
                 'message'       => $row['message'],
                 'url'           => $row['url'],
                 'is_read'       => (bool)$row['is_read'],
-                'actor_name'    => self::actorName((int)$row['actor_users_id']),
+                'actor_name'    => $ctx['actors'][(int)$row['actor_users_id']] ?? '',
                 'date_creation' => $row['date_creation'],
-                'ticket_status' => self::getTicketStatus($row['itemtype'], (int)$row['items_id']),
+                'ticket_status' => $ctx['status'][$itemtype][$itemsId] ?? 0,
             ];
-            $item['category'] = self::classifyNotification($item, $users_id);
+            $item['category'] = self::classifyWithContext($item, $users_id, $ctx);
             $rows[] = $item;
         }
 
@@ -2342,6 +2481,19 @@ class Notification extends CommonDBTM
             'is_read'       => 1,
             ['date_mod' => ['<', $cutoff]],
         ]);
+
+        // Remove unread notifications nobody will act on: tickets closed for
+        // more than 7 days or solved for more than 30 days. Without this,
+        // unread rows were never purged and backlogs grew without bound.
+        $DB->doQuery("
+            DELETE n FROM glpi_plugin_notifier_notifications AS n
+            INNER JOIN glpi_tickets AS t ON (n.itemtype = 'Ticket' AND t.id = n.items_id)
+            WHERE n.is_read = 0
+            AND (
+                (t.status = 6 AND n.date_creation < NOW() - INTERVAL 7 DAY)
+                OR (t.status = 5 AND n.date_creation < NOW() - INTERVAL 30 DAY)
+            )
+        ");
 
         // Remove notifications for deleted or inactive users
         $DB->doQuery("

@@ -1,5 +1,27 @@
 # Changelog
 
+All notable changes to this project are documented in this file.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+- The bell lists notifications for the entities active in the GLPI session
+  (entity selector) instead of every entity of the user's central profiles.
+- Poll interval raised from 30 s to 60 s; polling pauses while the tab is
+  hidden and stops after a 401/403 response (expired session).
+
+### Fixed
+- Unread notifications were never purged: unread rows for tickets closed more
+  than 7 days ago or solved more than 30 days ago are now removed by the
+  periodic cleanup.
+
+### Performance
+- `ajax/list.php` no longer loads the user's whole unread backlog: the query is
+  bounded to the newest rows and actor, status and category lookups are
+  batched instead of running several queries per notification.
+
 ## [1.4.0] - 2026-05-18
 
 ### Adicionado

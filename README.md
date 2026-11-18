@@ -2,6 +2,19 @@
 
 **[English](#english) | [Português do Brasil](#português-do-brasil)**
 
+> [!NOTE]
+> **Performance fork.** This repository is a fork of
+> [RicardoBarboza/glpi-plugin-notifier-plus](https://github.com/RicardoBarboza/glpi-plugin-notifier-plus)
+> focused on server load: bounded and batched bell queries, purge of stale
+> unread notifications and lighter polling. Features and UI are unchanged.
+> See [CHANGELOG.md](CHANGELOG.md) for the differences from upstream.
+>
+> **Fork de desempenho.** Este repositório é um fork do
+> [RicardoBarboza/glpi-plugin-notifier-plus](https://github.com/RicardoBarboza/glpi-plugin-notifier-plus)
+> voltado à carga no servidor: consultas do sino limitadas e em lote, limpeza
+> de notificações não lidas antigas e polling mais leve. Funcionalidades e
+> interface não mudam. Veja o [CHANGELOG.md](CHANGELOG.md).
+
 ---
 
 ## English
