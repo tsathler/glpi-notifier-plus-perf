@@ -1,0 +1,15 @@
+# Normalize line endings: the plugin runs on Linux and release zips must ship LF.
+* text=auto eol=lf
+
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.mp3  binary
+*.ogg  binary
+*.wav  binary
+*.mo   binary
+*.zip  binary
+
+# Keep repository-only files out of `git archive` release zips.
+.gitattributes export-ignore
+.github        export-ignore
