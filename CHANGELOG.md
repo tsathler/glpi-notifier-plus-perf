@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- "Assign to me" (`ajax/assignme.php`) now checks that the user can read the
+  ticket and may assign it to themselves. Before, any central user could become
+  the assigned technician of any ticket, including closed ones or tickets in
+  other entities.
+- The notifications page no longer shows the text of private tasks.
+
+### Fixed
+- The "notify others" recipients and the "Others" tab used the STEAL right bit
+  (16384) instead of READALL (1024): users who can see all tickets got no
+  notifications, while users with only STEAL got titles from the whole entity.
+
 ## [1.4.1] - 2026-11-18
 
 ### Changed

@@ -1371,7 +1371,7 @@ class Notification extends CommonDBTM
             AND u.is_deleted = 0
             AND u.id > 0
             AND pr.name = '{$right}'
-            AND (pr.rights & 16384) = 16384
+            AND (pr.rights & " . \Ticket::READALL . ") = " . \Ticket::READALL . "
             AND pref.notify_others = 1
             AND (
                 (pu.entities_id = {$entities_id})
@@ -1391,7 +1391,7 @@ class Notification extends CommonDBTM
     }
 
     /**
-     * Returns true if the given user has the READALL right on tickets (bit 65536).
+     * Returns true if the given user has the READALL right on tickets (Ticket::READALL).
      * This is used to control visibility of the "Demais" tab and notify_others toggle.
      */
     public static function canSeeOthers(int $users_id): bool
@@ -1408,7 +1408,7 @@ class Notification extends CommonDBTM
             'WHERE' => [
                 'pu.users_id' => $users_id,
                 'pr.name'     => 'ticket',
-                new QueryExpression('(`pr`.`rights` & 16384) = 16384'),
+                new QueryExpression('(`pr`.`rights` & ' . \Ticket::READALL . ') = ' . \Ticket::READALL),
             ],
         ]);
         return (int)($rs->current()['cpt'] ?? 0) > 0;
