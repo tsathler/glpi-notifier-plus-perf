@@ -33,6 +33,12 @@ if (!$ticket->getFromDB($items_id)) {
     exit;
 }
 
+// Ticket_User::add() does not check rights: enforce the same rules as the ticket form.
+if (!$ticket->can($items_id, READ) || !$ticket->canAssignToMe()) {
+    echo json_encode(['success' => false, 'message' => 'Você não tem permissão para assumir este chamado']);
+    exit;
+}
+
 // Check user already assigned
 $ticket_user = new Ticket_User();
 $existing = $ticket_user->find([

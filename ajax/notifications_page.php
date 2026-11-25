@@ -93,7 +93,7 @@ function getEventContent(array $item): string {
         $tm = ['Ticket' => 'glpi_tickettasks', 'Change' => 'glpi_changetasks', 'Problem' => 'glpi_problemtasks'];
         $fk = ['Ticket' => 'tickets_id', 'Change' => 'changes_id', 'Problem' => 'problems_id'];
         if (isset($tm[$type])) {
-            $rs = $DB->request(['SELECT' => ['content'], 'FROM' => $tm[$type], 'WHERE' => [$fk[$type] => $id], 'ORDER' => ['id DESC'], 'LIMIT' => 1]);
+            $rs = $DB->request(['SELECT' => ['content'], 'FROM' => $tm[$type], 'WHERE' => [$fk[$type] => $id, 'is_private' => 0], 'ORDER' => ['id DESC'], 'LIMIT' => 1]);
             if ($row = $rs->current()) return mb_substr(strip_tags(html_entity_decode($row['content'] ?? '')), 0, 120);
         }
     }
